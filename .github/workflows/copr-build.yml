@@ -1,0 +1,205 @@
+name: Trigger COPR Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Optional target version (e.g. 1.5.8). Leave blank to use the latest upstream vX.Y.Z tag."
+        type: string
+        required: false
+        default: ""
+      force:
+        description: "Trigger a COPR build even if jadx.spec already matches the target version"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jadx-copr-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: skylot/jadx
+  SPEC: jadx.spec
+  COPR_PROJECT: jadx
+  COLOR_INFO: "\e[1;36m"
+  COLOR_SUCCESS: "\e[1;32m"
+  COLOR_WARN: "\e[1;33m"
+  COLOR_RESET: "\e[0m"
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_bump: ${{ steps.compare.outputs.should_bump }}
+      should_build: ${{ steps.compare.outputs.should_build }}
+      old_ver: ${{ steps.compare.outputs.old_ver }}
+      new_ver: ${{ steps.compare.outputs.new_ver }}
+      tag: ${{ steps.compare.outputs.tag }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compare Spec Version with Target / Latest Tag
+        id: compare
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          OLD_VER=$(awk '/^Version:/ {print $2; exit}' "$SPEC")
+          if [ -z "$OLD_VER" ]; then
+            echo "::error::==> [ERROR] Could not read Version from $SPEC"
+            exit 1
+          fi
+
+          if [ -n "$INPUT_VERSION" ]; then
+            NEW_VER="${INPUT_VERSION#v}"
+            TAG="v$NEW_VER"
+          else
+            TAG=$(git ls-remote --tags --refs --sort='-v:refname' \
+                    "https://github.com/${UPSTREAM_REPO}.git" 'refs/tags/v*' \
+                  | awk '{sub("refs/tags/", "", $2); print $2}' \
+                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+            if [ -z "$TAG" ]; then
+              echo "::error::==> [ERROR] No release tag found in ${UPSTREAM_REPO}"
+              exit 1
+            fi
+            NEW_VER="${TAG#v}"
+          fi
+
+          echo "Spec version:     $OLD_VER"
+          echo "Target version:   $NEW_VER ($TAG)"
+
+          SHOULD_BUMP=false
+          if [ "$OLD_VER" != "$NEW_VER" ]; then
+            NEWEST=$(printf '%s\n%s\n' "$OLD_VER" "$NEW_VER" | sort -V | tail -n 1)
+            if [ "$NEWEST" = "$NEW_VER" ] || [ -n "$INPUT_VERSION" ]; then
+              SHOULD_BUMP=true
+              echo -e "${COLOR_INFO}==> [INFO] Bumping jadx: $OLD_VER -> $NEW_VER${COLOR_RESET}"
+            else
+              echo -e "${COLOR_WARN}==> [WARNING] Spec ($OLD_VER) is newer than upstream ($NEW_VER). Not downgrading.${COLOR_RESET}"
+            fi
+          else
+            echo -e "${COLOR_SUCCESS}==> [OK] jadx is already at $OLD_VER${COLOR_RESET}"
+          fi
+
+          SHOULD_BUILD="$SHOULD_BUMP"
+          if [ "$FORCE" = "true" ]; then
+            SHOULD_BUILD=true
+            echo -e "${COLOR_WARN}==> [WARNING] Forced run: a COPR build will be triggered.${COLOR_RESET}"
+          fi
+
+          {
+            echo "should_bump=$SHOULD_BUMP"
+            echo "should_build=$SHOULD_BUILD"
+            echo "old_ver=$OLD_VER"
+            echo "new_ver=$NEW_VER"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Bump Version, Changelog and README Badge
+        if: needs.check-version.outputs.should_bump == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.tag }}
+          OLD_VER: ${{ needs.check-version.outputs.old_ver }}
+          NEW_VER: ${{ needs.check-version.outputs.new_ver }}
+        run: |
+          echo -e "${COLOR_INFO}==> [INFO] Bumping jadx from $OLD_VER to $NEW_VER...${COLOR_RESET}"
+          sed -i "s|^Version:.*|Version:        $NEW_VER|" "$SPEC"
+
+          python3 scripts/get_changelog.py "$UPSTREAM_REPO" "$TAG" > changelog.txt
+
+          DATE=$(LC_ALL=C date -u +"%a %b %d %Y")
+          AUTHOR="Infiniti151 <43163551+Infiniti151@users.noreply.github.com>"
+          {
+            echo "* $DATE $AUTHOR - $NEW_VER-1"
+            sed 's/%/%%/g' changelog.txt
+            echo ""
+          } > entry.tmp
+
+          if grep -q "^%changelog" "$SPEC"; then
+            awk -v file="entry.tmp" '
+              /^%changelog/ {
+                print
+                while ((getline line < file) > 0) print line
+                close(file)
+                next
+              }
+              { print }
+            ' "$SPEC" > "${SPEC}.tmp" && mv "${SPEC}.tmp" "$SPEC"
+          else
+            printf '\n%%changelog\n' >> "$SPEC"
+            cat entry.tmp >> "$SPEC"
+          fi
+
+          if [ -f README.md ] && grep -q 'img.shields.io/badge/jadx-' README.md; then
+            python3 - <<'PY'
+          import os, re
+          ver = os.environ["NEW_VER"]
+          with open("README.md", "r", encoding="utf-8") as f:
+              content = f.read()
+          updated = re.sub(r"(img\.shields\.io/badge/jadx-)[0-9][0-9.]*(-)", rf"\g<1>{ver}\2", content)
+          with open("README.md", "w", encoding="utf-8") as f:
+              f.write(updated)
+          PY
+          fi
+
+          {
+            echo "### jadx $OLD_VER -> $NEW_VER"
+            echo ""
+            echo "**Changelog:**"
+            cat changelog.txt
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          rm -f entry.tmp changelog.txt
+          git --no-pager diff --stat
+
+      - name: Commit and Push Version Bump
+        if: needs.check-version.outputs.should_bump == 'true'
+        uses: suzuki-shunsuke/commit-action@5eaa5ecce3ffe93d09a85b946dc5136e3713b1b7 # v1.1.0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          branch: main
+          commit_message: "chore: bump jadx to ${{ needs.check-version.outputs.new_ver }} [skip ci]"
+          files: |
+            jadx.spec
+            README.md
+          fail_on_self_push: false
+
+      - name: Trigger COPR Build
+        env:
+          COPR_URL: ${{ secrets.COPR_BASE_WEBHOOK_URL }}
+        run: |
+          BASE_URL=$(echo "$COPR_URL" | xargs)
+          FINAL_URL="${BASE_URL%/}/${COPR_PROJECT}/"
+
+          echo -e "${COLOR_INFO}==> [INFO] Triggering COPR build...${COLOR_RESET}"
+          if ! RESPONSE=$(curl -fsS -X POST "$FINAL_URL"); then
+            echo "::error::==> [ERROR] Webhook failed to trigger COPR build."
+            exit 1
+          fi
+
+          BUILD_ID=$(echo "$RESPONSE" | tr -d '[:space:]')
+          if [[ ! "$BUILD_ID" =~ ^[0-9]+$ ]]; then
+            echo "::error::==> [ERROR] Webhook returned an invalid build ID: '$RESPONSE'"
+            exit 1
+          fi
+
+          echo -e "${COLOR_SUCCESS}==> [SUCCESS] Triggered COPR build #$BUILD_ID!${COLOR_RESET}"
+          echo "COPR build triggered: https://copr.fedorainfracloud.org/coprs/build/$BUILD_ID/" >> "$GITHUB_STEP_SUMMARY"
