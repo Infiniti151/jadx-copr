@@ -77,3 +77,17 @@ ls %{buildroot}%{_datadir}/%{name}/lib/*.jar >/dev/null
 %{_datadir}/%{name}/
 %{_datadir}/applications/%{name}-gui.desktop
 %{_datadir}/icons/hicolor/256x256/apps/%{name}.png
+
+%changelog
+* Tue Nov 24 2026 Infiniti151 <43163551+Infiniti151@users.noreply.github.com> - 1.5.7-1
+- Bundled Java JDK updated as a `Java4Shell` vulnerability mitigation.
+- This release includes only a stable changes from master branch.
+- [build] Create a macOS install bundle for jadx-gui (PR #2916)
+- [build] Add file associations for macOS (PR #2917)
+- [build] Build Windows .msi bundle
+- [gui] Use ResourcePanel with file-type specific tabs. (PR #2915)
+- [gui] Make inheritance graphs display both super and subclass relations (PR #2935)
+- [gui] Add tree filter (PR #2941)
+- [core] Sanitize user comments (PR #2940)
+- [core] Disable `AdjustForIfMergeVisitor` as regression workaround (#2951)
+- ... (see upstream for full release notes)

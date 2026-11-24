@@ -1,4 +1,5 @@
 # jadx-copr
+<img src="https://raw.githubusercontent.com/skylot/jadx/master/jadx-gui/src/main/resources/logos/jadx-logo.png" align="right" width="130" alt="jadx logo">
 
 [![Build](https://img.shields.io/github/actions/workflow/status/Infiniti151/jadx-copr/copr-build.yml?branch=main&style=for-the-badge&logo=github-actions&logoColor=white&label=Build)](https://github.com/Infiniti151/jadx-copr/actions/workflows/copr-build.yml)
 [![COPR Build Status](https://img.shields.io/badge/dynamic/json?url=https://copr.fedorainfracloud.org/api_3/build/list/%3Fownername%3Dinfiniti151%26projectname%3Djadx%26limit%3D1&query=$.items[0].state&label=COPR&style=for-the-badge&logo=fedora&logoColor=white&color=%2351A2DA)](https://copr.fedorainfracloud.org/coprs/infiniti151/jadx/)
@@ -22,3 +23,14 @@ Built from upstream `jadx` release archives using an FHS-compliant layout
 ```bash
 sudo dnf copr enable infiniti151/jadx
 sudo dnf install jadx
+```
+
+## License
+
+The packaging files in this repository (the spec file, README and scripts) are
+licensed under the [MIT License](LICENSE).
+
+`jadx` itself is licensed separately, under Apache-2.0. See the
+[upstream repository](https://github.com/pskylot/jadx).
+
+The jadx logo at the top is loaded from the upstream repository and is not covered by the license of this repository.
